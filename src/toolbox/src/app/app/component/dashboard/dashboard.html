@@ -1,1 +1,195 @@
-<p>dashboard works!</p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Relationship Graph</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .node {
+            cursor: pointer;
+        }
+        .node circle {
+            fill: #fff;
+            stroke: steelblue;
+            stroke-width: 3px;
+        }
+        .node text {
+            font: 12px sans-serif;
+        }
+        .link {
+            fill: none;
+            stroke: #ccc;
+            stroke-width: 2px;
+        }
+        .arrowhead {
+            fill: #ccc;
+        }
+        .highlight {
+            stroke: #ff7f0e;
+            stroke-width: 4px;
+        }
+        #search-container {
+            margin: 10px;
+        }
+        #search-input {
+            padding: 5px;
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div id="search-container">
+        <input type="text" id="search-input" placeholder="搜索节点...">
+    </div>
+    <svg width="100%" height="600"></svg>
+    <script>
+        // 示例数据 - 多对多关系，带方向属性
+        const data = {
+            nodes: [
+                { id: 'A', name: '节点 A', x: 100, y: 100 },
+                { id: 'B', name: '节点 B', x: 200, y: 100 },
+                { id: 'C', name: '节点 C', x: 300, y: 100 },
+                { id: 'D', name: '节点 D', x: 400, y: 100 },
+                { id: 'E', name: '节点 E', x: 500, y: 100 }
+            ],
+            links: [
+                { source: 'A', target: 'B', direction: 'forward' },
+                { source: 'B', target: 'C', direction: 'forward' },
+                { source: 'C', target: 'D', direction: 'forward' },
+                { source: 'D', target: 'E', direction: 'forward' },
+                { source: 'E', target: 'A', direction: 'forward' },
+                { source: 'A', target: 'C', direction: 'forward' },
+                { source: 'B', target: 'D', direction: 'forward' }
+            ]
+        };
+
+        const svg = d3.select('svg');
+        const width = +svg.attr('width');
+        const height = +svg.attr('height');
+
+        const simulation = d3.forceSimulation(data.nodes)
+            .force('link', d3.forceLink(data.links).id(d => d.id).distance(150))
+            .force('charge', d3.forceManyBody().strength(-500))
+            .force('center', d3.forceCenter(width / 2, height / 2));
+
+        // 添加箭头标记
+        svg.append('defs').selectAll('marker')
+            .data(data.links)
+            .join('marker')
+            .attr('id', d => `arrow-${d.source.id}-${d.target.id}`)
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 35)
+            .attr('refY', 0)
+            .attr('markerWidth', 6)
+            .attr('markerHeight', 6)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('d', 'M0,-5L10,0L0,5')
+            .attr('class', 'arrowhead');
+
+        const link = svg.append('g')
+            .selectAll('line')
+            .data(data.links)
+            .join('line')
+            .attr('class', 'link')
+            .attr('marker-end', d => `url(#arrow-${d.source.id}-${d.target.id})`);
+
+        const node = svg.append('g')
+            .selectAll('.node')
+            .data(data.nodes)
+            .join('g')
+            .attr('class', 'node')
+            .call(d3.drag()
+                .on('start', dragstarted)
+                .on('drag', dragged)
+                .on('end', dragended));
+
+        node.append('circle')
+            .attr('r', 10);
+
+        node.append('text')
+            .attr('dy', -15)
+            .text(d => d.name);
+
+        simulation.on('tick', () => {
+            link
+                .attr('x1', d => isNaN(d.source.x) ? 0 : d.source.x)
+                .attr('y1', d => isNaN(d.source.y) ? 0 : d.source.y)
+                .attr('x2', d => isNaN(d.target.x) ? 0 : d.target.x)
+                .attr('y2', d => isNaN(d.target.y) ? 0 : d.target.y);
+
+            node
+                .attr('transform', d => `translate(${isNaN(d.x) ? 0 : d.x},${isNaN(d.y) ? 0 : d.y})`);
+        });
+
+        // 高亮显示选中节点及其关联节点
+        node.on('click', (event, d) => {
+            // 清除之前的高亮状态
+            link.classed('highlight', false);
+            node.select('circle').classed('highlight', false);
+
+            // 获取所有与选中节点有直接或间接关系的节点 ID
+            const relatedNodeIds = getRelatedNodeIds(d.id);
+
+            // 高亮显示相关节点和边
+            node.filter(n => relatedNodeIds.includes(n.id))
+                .select('circle')
+                .classed('highlight', true);
+
+            link.filter(l => relatedNodeIds.includes(l.source.id) && relatedNodeIds.includes(l.target.id))
+                .classed('highlight', true);
+        });
+
+        // 模糊搜索功能
+        d3.select('#search-input').on('input', function() {
+            const searchTerm = this.value.toLowerCase();
+            if (searchTerm) {
+                node.classed('hidden', d => !d.name.toLowerCase().includes(searchTerm));
+            } else {
+                node.classed('hidden', false);
+            }
+        });
+
+        function getRelatedNodeIds(startId) {
+            const visited = new Set();
+            const queue = [startId];
+
+            while (queue.length) {
+                const currentId = queue.shift();
+                if (!visited.has(currentId)) {
+                    visited.add(currentId);
+                    // 添加所有与当前节点直接相连的节点
+                    data.links.forEach(link => {
+                        if (link.source.id === currentId) {
+                            queue.push(link.target.id);
+                        }
+                        if (link.target.id === currentId) {
+                            queue.push(link.source.id);
+                        }
+                    });
+                }
+            }
+
+            return Array.from(visited);
+        }
+
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+    </script>
+</body>
+</html>
